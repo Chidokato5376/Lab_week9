@@ -1,135 +1,29 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, SQLModel, select
-
-from app.database import SessionDep, engine
-from app.models import (
-    Hero, HeroCreate, HeroPublic, HeroUpdate,
-    Team, TeamCreate, TeamPublic,
-    Mission, MissionCreate, MissionPublic
-)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import SQLModel
+from app.database import engine
+from app.routers import heroes, teams
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     yield
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="Heroes API", 
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-def ensure_team_exists(session: Session, team_id: int | None):
-    """Xử lý Challenge 6.3: Kiểm tra team_id trước khi insert/update"""
-    if team_id is not None and not session.get(Team, team_id):
-        raise HTTPException(status_code=404, detail="Team not found")
+# Cấu hình CORS để frontend ở port 5500 có thể gọi API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5500", "http://127.0.0.1:5500"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ---------- Heroes ----------
-@app.post("/heroes", response_model=HeroPublic, status_code=201)
-def create_hero(hero_in: HeroCreate, session: SessionDep):
-    ensure_team_exists(session, hero_in.team_id)
-    hero = Hero.model_validate(hero_in)
-    session.add(hero)
-    session.commit()
-    session.refresh(hero)
-    return hero
-
-@app.get("/heroes", response_model=list[HeroPublic])
-def list_heroes(
-    session: SessionDep,
-    offset: int = 0,
-    limit: int = Query(default=10, le=100),
-    min_age: int | None = None,
-    team_id: int | None = None,
-    name: str | None = None,
-):
-    """Xử lý Task 6.2: Thêm bộ lọc (Filter)"""
-    statement = select(Hero)
-    if min_age is not None:
-        statement = statement.where(Hero.age >= min_age)
-    if team_id is not None:
-        statement = statement.where(Hero.team_id == team_id)
-    if name:
-        statement = statement.where(Hero.name.ilike(f"%{name}%"))
-    
-    statement = statement.order_by(Hero.id).offset(offset).limit(limit)
-    return session.exec(statement).all()
-
-@app.get("/heroes/{hero_id}", response_model=HeroPublic)
-def read_hero(hero_id: int, session: SessionDep):
-    hero = session.get(Hero, hero_id)
-    if not hero:
-        raise HTTPException(status_code=404, detail="Hero not found")
-    return hero
-
-@app.patch("/heroes/{hero_id}", response_model=HeroPublic)
-def update_hero(hero_id: int, hero_in: HeroUpdate, session: SessionDep):
-    hero = session.get(Hero, hero_id)
-    if not hero:
-        raise HTTPException(status_code=404, detail="Hero not found")
-    data = hero_in.model_dump(exclude_unset=True)
-    ensure_team_exists(session, data.get("team_id"))
-    hero.sqlmodel_update(data)
-    session.add(hero)
-    session.commit()
-    session.refresh(hero)
-    return hero
-
-@app.delete("/heroes/{hero_id}", status_code=204)
-def delete_hero(hero_id: int, session: SessionDep):
-    hero = session.get(Hero, hero_id)
-    if not hero:
-        raise HTTPException(status_code=404, detail="Hero not found")
-    session.delete(hero)
-    session.commit()
-
-# ---------- Teams (Task 6.1) ----------
-@app.post("/teams", response_model=TeamPublic, status_code=201)
-def create_team(team_in: TeamCreate, session: SessionDep):
-    team = Team.model_validate(team_in)
-    session.add(team)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(status_code=409, detail="Team name already exists")
-    session.refresh(team)
-    return team
-
-@app.get("/teams", response_model=list[TeamPublic])
-def list_teams(session: SessionDep):
-    return session.exec(select(Team).order_by(Team.id)).all()
-
-@app.get("/teams/{team_id}/heroes", response_model=list[HeroPublic])
-def list_team_heroes(team_id: int, session: SessionDep):
-    team = session.get(Team, team_id)
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-    return team.heroes
-
-# ---------- Missions (Task 7) ----------
-@app.post("/missions", response_model=MissionPublic, status_code=201)
-def create_mission(mission_in: MissionCreate, session: SessionDep):
-    mission = Mission.model_validate(mission_in)
-    session.add(mission)
-    session.commit()
-    session.refresh(mission)
-    return mission
-
-@app.post("/heroes/{hero_id}/missions/{mission_id}", status_code=204)
-def assign_mission(hero_id: int, mission_id: int, session: SessionDep):
-    hero = session.get(Hero, hero_id)
-    mission = session.get(Mission, mission_id)
-    if not hero or not mission:
-        raise HTTPException(status_code=404, detail="Hero or mission not found")
-    
-    # Chỉ gán nếu mission chưa nằm trong danh sách missions của hero
-    if mission not in hero.missions:
-        hero.missions.append(mission)
-        session.add(hero)
-        session.commit()
-
-@app.get("/heroes/{hero_id}/missions", response_model=list[MissionPublic])
-def list_hero_missions(hero_id: int, session: SessionDep):
-    hero = session.get(Hero, hero_id)
-    if not hero:
-        raise HTTPException(status_code=404, detail="Hero not found")
-    return hero.missions
+# Gắn các router vào ứng dụng chính với versioning /api/v1
+app.include_router(heroes.router, prefix="/api/v1")
+app.include_router(teams.router, prefix="/api/v1")

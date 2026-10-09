@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Heroes API</title>
+</head>
+<body>
+    <h1>Heroes List</h1>
+    <table id="heroes" border="1">
+        <thead>
+            <tr><th>ID</th><th>Name</th><th>Age</th><th>Status</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h2>Create a Hero</h2>
+    <form id="createForm">
+        <input type="text" id="h_name" placeholder="Name" required>
+        <input type="text" id="h_secret" placeholder="Secret Name" required>
+        <input type="number" id="h_age" placeholder="Age">
+        <button type="submit">Create</button>
+    </form>
+
+    <script>
+        const API = "http://127.0.0.1:8000/api/v1";
+        const tbody = document.querySelector("#heroes tbody");
+
+        async function loadHeroes() {
+            const res = await fetch(`${API}/heroes?limit=50`);
+            const heroes = await res.json();
+            tbody.replaceChildren();
+            for (const h of heroes) {
+                const tr = tbody.insertRow();
+                for (const v of [h.id, h.name, h.age ?? "-", h.status]) {
+                    tr.insertCell().textContent = v;
+                }
+            }
+        }
+
+        async function createHero(data) {
+            const res = await fetch(`${API}/heroes`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(data),
+            });
+            if (res.status === 201) {
+                await loadHeroes();
+                document.getElementById("createForm").reset();
+            } else if (res.status === 422) {
+                const err = await res.json();
+                alert(err.detail.map(d => `${d.loc.at(-1)}: ${d.msg}`).join("\n"));
+            } else {
+                alert(`Error ${res.status}`);
+            }
+        }
+
+        document.getElementById("createForm").addEventListener("submit", e => {
+            e.preventDefault();
+            const ageVal = document.getElementById("h_age").value;
+            createHero({
+                name: document.getElementById("h_name").value,
+                secret_name: document.getElementById("h_secret").value,
+                age: ageVal ? parseInt(ageVal) : null
+            });
+        });
+
+        loadHeroes();
+    </script>
+</body>
+</html>
